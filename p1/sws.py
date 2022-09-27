@@ -4,9 +4,10 @@ import sys
 import queue
 import time
 import re
+from os.path import exists
 
 EOL_PATTERN = r'^(\r\n|\n)?$'
-REQ_PATTERN = r'^GET\s(.*)\sHTTP\/1.0(\r\n|\n)?'
+REQ_PATTERN = r'^GET\s\/(.*)\sHTTP\/1.0(\r\n|\n)?'
 CONNECTION_PATTERN = r'Connection:\s(.*)(\r\n|\n)?'
 
 ip_address = sys.argv[1]
@@ -29,7 +30,6 @@ response_messages = {}
 request_message = {}
 
 def check_format(message):
-    print(message)
     if re.match(REQ_PATTERN, message) or re.match(CONNECTION_PATTERN, message) or re.match(EOL_PATTERN, message):
         return True
     return False
@@ -55,10 +55,12 @@ while True:
                     request_message[s] = message
                 else:
                     request_message[s] += message
-                print(re.match(EOL_PATTERN, message))
                 if re.match(EOL_PATTERN, message):
                     whole_message = request_message[s]
                     outputs.append(s)
+
+                    req_file = "/"
+                    file_found = False
 
                     for line in whole_message.splitlines():
                         if not check_format(line):
@@ -68,14 +70,20 @@ while True:
                             break
                         else:
                             if re.match(REQ_PATTERN, line):
-                                print("Request")
-                                response_messages[s].put("HTTP/1.0 200 OK\r\n")
+                                req_file = re.match(REQ_PATTERN, line).group(1) if re.match(REQ_PATTERN, line).group(1) != "/" else "index.html"
+                                print("req_file: ", req_file)
+                                if exists(req_file):
+                                    response_messages[s].put("HTTP/1.0 200 OK\r\n")
+                                    file_found = True
+                                else:
+                                    response_messages[s].put("HTTP/1.0 404 Not Found\r\n")
                             elif re.match(CONNECTION_PATTERN, line):
-                                print("Connection")
                                 result = re.search(CONNECTION_PATTERN, line)
                                 response_messages[s].put(f"Connection: {result.group(1)}\r\n\r\n")
-                            else:
-                                response_messages[s].put("\r\n")
+                    if file_found:
+                        with open(req_file, 'r') as f:
+                            response_messages[s].put(f.read())
+                        print('\r\n')
 
     for s in outputs:
         try:
