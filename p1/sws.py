@@ -28,7 +28,9 @@ inputs = [server]
 outputs = []
 response_messages = {}
 request_message = {}
+close_connection = {}
 
+# Helper methods
 def check_format(message):
     if re.match(REQ_PATTERN, message) or re.match(CONNECTION_PATTERN, message) or re.match(EOL_PATTERN, message):
         return True
@@ -38,57 +40,90 @@ def print_queue(queue):
     while not queue.empty():
         print(queue.get())
 
-while True:
-    readable, _, __ = select.select(inputs, outputs, inputs)
+def main():
+    while True:
+        readable, writable, exceptional = select.select(inputs, outputs, inputs)
 
-    for s in readable:
-        if s is server:
-            connection, client_address = s.accept()
-            print("Connection from", client_address)
-            connection.setblocking(0)
-            inputs.append(connection)
-            response_messages[connection] = queue.Queue()
+        for s in readable:
+            if s is server:
+                handle_new_connection(s)
+            else:
+                handle_existing_connection(s)
+
+        for s in writable:
+            write_back_response(s)
+
+        for s in exceptional:
+            handle_connection_error(s)
+
+def handle_new_connection(socket):
+    connection, client_address = socket.accept()
+    print("Connection from", client_address)
+    connection.setblocking(0)
+    inputs.append(connection)
+    response_messages[connection] = queue.Queue()
+    close_connection[connection] = True
+
+def handle_existing_connection(socket):
+    message = socket.recv(1024).decode()
+    if message:
+        if request_message.get(socket) is None:
+            request_message[socket] = message
         else:
-            message = s.recv(1024).decode()
-            if message:
-                if request_message.get(s) is None:
-                    request_message[s] = message
+            request_message[socket] += message
+        if re.match(EOL_PATTERN, message):
+            whole_message = request_message[socket]
+            outputs.append(socket)
+
+            req_file = ""
+            connection = "close"
+            file_found = False
+
+            for line in whole_message.splitlines():
+                if not check_format(line):
+                    # Clear existing response messages
+                    response_messages[socket].queue.clear()
+                    response_messages[socket].put("HTTP/1.0 400 Bad Request\r\n\r\n")
+                    close_connection[socket] = True
+                    break
                 else:
-                    request_message[s] += message
-                if re.match(EOL_PATTERN, message):
-                    whole_message = request_message[s]
-                    outputs.append(s)
-
-                    req_file = "/"
-                    file_found = False
-
-                    for line in whole_message.splitlines():
-                        if not check_format(line):
-                            # Clear existing response messages
-                            response_messages[s].queue.clear()
-                            response_messages[s].put("HTTP/1.0 400 Bad Request\r\n\r\n")
-                            break
+                    if re.match(REQ_PATTERN, line):
+                        req_file = re.match(REQ_PATTERN, line).group(1) if re.match(REQ_PATTERN, line).group(1) != "" else "index.html"
+                        if exists(req_file):
+                            response_messages[socket].put("HTTP/1.0 200 OK\r\n")
+                            file_found = True
                         else:
-                            if re.match(REQ_PATTERN, line):
-                                req_file = re.match(REQ_PATTERN, line).group(1) if re.match(REQ_PATTERN, line).group(1) != "/" else "index.html"
-                                print("req_file: ", req_file)
-                                if exists(req_file):
-                                    response_messages[s].put("HTTP/1.0 200 OK\r\n")
-                                    file_found = True
-                                else:
-                                    response_messages[s].put("HTTP/1.0 404 Not Found\r\n")
-                            elif re.match(CONNECTION_PATTERN, line):
-                                result = re.search(CONNECTION_PATTERN, line)
-                                response_messages[s].put(f"Connection: {result.group(1)}\r\n\r\n")
-                    if file_found:
-                        with open(req_file, 'r') as f:
-                            response_messages[s].put(f.read())
-                        print('\r\n')
+                            response_messages[socket].put("HTTP/1.0 404 Not Found\r\n")
+                    elif re.match(CONNECTION_PATTERN, line):
+                        connection = re.search(CONNECTION_PATTERN, line).group(1)
+                        if connection == "keep-alive":
+                            close_connection[socket] = False
+            response_messages[socket].put(f"Connection: {connection}\r\n\r\n")
+            if file_found:
+                print("file_found")
+                with open(req_file, 'r') as f:
+                    response_messages[socket].put(f.read())
+                response_messages[socket].put("\r\n")
 
-    for s in outputs:
-        try:
-            next_msg = response_messages[s].get_nowait()
-        except queue.Empty:
-            outputs.remove(s)
-        else:
-            s.send(next_msg.encode())
+def write_back_response(socket):
+    try:
+        next_msg = response_messages[socket].get_nowait()
+    except queue.Empty:
+        outputs.remove(socket)
+    else:
+        msg = next_msg.encode()
+        socket.send(msg)
+        if(close_connection[socket] and response_messages[socket].empty()):
+            outputs.remove(socket)
+            inputs.remove(socket)
+            socket.close()
+
+def handle_connection_error(socket):
+    print("Connection error")
+    if socket in outputs:
+        outputs.remove(socket)
+    inputs.remove(socket)
+    socket.close()
+
+if __name__ == "__main__":
+    main()
