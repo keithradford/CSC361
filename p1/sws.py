@@ -1,4 +1,3 @@
-from math import nextafter
 import socket
 import select
 import sys
@@ -7,7 +6,8 @@ import re
 from datetime import datetime
 from os.path import exists
 
-EOL_PATTERN = r'^(\r\n|\n)?$'
+EOL_PATTERN = r'^(\r\n|\n)$'
+EOR_PATTERN = r'.*(\r\n\r\n|\n\n)$'
 REQ_PATTERN = r'^GET\s\/(.*)\sHTTP\/1.0(\r\n|\n)?'
 CONNECTION_PATTERN = r'Connection:\s?(.*)\s*(\r\n|\n)?'
 
@@ -15,15 +15,12 @@ ip_address = sys.argv[1]
 port_number = int(sys.argv[2])
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-print("Socket created")
 
 server.setblocking(0)
 
 server.bind((ip_address, port_number))
-print("Socket binded to %s" %(port_number))
 
 server.listen(5)
-print("Socket is listening")
 
 inputs = [server]
 outputs = []
@@ -35,7 +32,6 @@ log = {"response": "", "request": "", "time": ""}
 def main():
     while True:
         readable, writable, exceptional = select.select(inputs, outputs, inputs)
-
         for s in readable:
             if s is server:
                 handle_new_connection(s)
@@ -56,8 +52,7 @@ def check_format(message):
     return False
 
 def handle_new_connection(socket):
-    connection, client_address = socket.accept()
-    print("Connection from", client_address)
+    connection, _ = socket.accept()
     connection.setblocking(0)
     inputs.append(connection)
     response_messages[connection] = queue.Queue()
@@ -70,42 +65,62 @@ def handle_existing_connection(socket):
             request_message[socket] = message
         else:
             request_message[socket] += message
-        if re.match(EOL_PATTERN, message):
+        if re.search(EOR_PATTERN, message) or re.match(EOL_PATTERN, message):
             whole_message = request_message[socket]
             log["request"] = whole_message.strip()
             outputs.append(socket)
 
             req_file = ""
-            connection = "close"
             file_found = False
+            bad_request = False
+            connection_header = False
+            i = 0
 
-            for line in whole_message.splitlines():
-                if not check_format(line):
-                    # Clear existing response messages
-                    response_messages[socket].queue.clear()
-                    response_messages[socket].put("HTTP/1.0 400 Bad Request\r\n\r\n")
-                    log["response"] = "HTTP/1.0 400 Bad Request"
+            requests = list(filter((lambda x: x != "\r\n\r\n" and x != "\n\n" and x != ""), re.split(r'(\r\n\r\n|\n\n)', whole_message)))
+            responses = []
+
+            for request in requests:
+                for line in request.splitlines():
+                    if not check_format(line):
+                        if i < len(responses) - 1:
+                            responses[i] = "HTTP/1.0 400 Bad Request\r\n\r\n"
+                        else:
+                            responses.append("HTTP/1.0 400 Bad Request\r\n\r\n")
+                        log["response"] = "HTTP/1.0 400 Bad Request"
+                        bad_request = True
+                    else:
+                        if re.match(REQ_PATTERN, line):
+                            req_file = re.match(REQ_PATTERN, line).group(1) if re.match(REQ_PATTERN, line).group(1) != "" else "index.html"
+                            if exists(req_file):
+                                responses.append("HTTP/1.0 200 OK\r\n")
+                                log["response"] = "HTTP/1.0 200 OK"
+                                file_found = True
+                            else:
+                                responses.append("HTTP/1.0 404 Not Found\r\n")
+                                log["response"] = "HTTP/1.0 404 Not Found"
+                        elif re.match(CONNECTION_PATTERN, line):
+                            connection_header = True
+                            connection = re.search(CONNECTION_PATTERN, line).group(1)
+                            if connection.lower() == "keep-alive":
+                                close_connection[socket] = False
+                            elif connection.lower() == "close":
+                                close_connection[socket] = True
+                c = "close" if close_connection[socket] or not connection_header else "keep-alive"
+                responses[i] += f"Connection: {c}\r\n\r\n" if not bad_request else ""
+                if file_found:
+                    with open(req_file, 'r') as f:
+                        responses[i] += f.read()
+                    responses[i] += "\r\n\r\n"
+                if close_connection[socket] or not connection_header:
                     close_connection[socket] = True
                     break
-                else:
-                    if re.match(REQ_PATTERN, line):
-                        req_file = re.match(REQ_PATTERN, line).group(1) if re.match(REQ_PATTERN, line).group(1) != "" else "index.html"
-                        if exists(req_file):
-                            response_messages[socket].put("HTTP/1.0 200 OK\r\n")
-                            log["response"] = "HTTP/1.0 200 OK"
-                            file_found = True
-                        else:
-                            response_messages[socket].put("HTTP/1.0 404 Not Found\r\n")
-                            log["response"] = "HTTP/1.0 404 Not Found"
-                    elif re.match(CONNECTION_PATTERN, line):
-                        connection = re.search(CONNECTION_PATTERN, line).group(1)
-                        if connection == "keep-alive":
-                            close_connection[socket] = False
-            response_messages[socket].put(f"Connection: {connection}\r\n\r\n")
-            if file_found:
-                with open(req_file, 'r') as f:
-                    response_messages[socket].put(f.read())
-                response_messages[socket].put("\r\n")
+                file_found = False
+                bad_request = False
+                req_file = ""
+                i += 1
+                connection_header = False
+            for response in responses:
+                response_messages[socket].put(response)
 
 def write_back_response(socket):
     try:
@@ -123,7 +138,6 @@ def write_back_response(socket):
             socket.close()
 
 def handle_connection_error(socket):
-    print("Connection error")
     if socket in outputs:
         outputs.remove(socket)
     inputs.remove(socket)
