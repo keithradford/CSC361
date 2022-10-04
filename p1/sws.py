@@ -3,13 +3,14 @@ import select
 import sys
 import queue
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from os.path import exists
 
 EOL_PATTERN = r'^(\r\n|\n)$'
 EOR_PATTERN = r'.*(\r\n\r\n|\n\n)$'
 REQ_PATTERN = r'^GET\s\/(.*)\sHTTP\/1.0(\r\n|\n)?'
 CONNECTION_PATTERN = r'Connection:\s?(.*)\s*(\r\n|\n)?'
+TIMEOUT = 10.0
 
 ip_address = sys.argv[1]
 port_number = int(sys.argv[2])
@@ -27,11 +28,19 @@ outputs = []
 response_messages = {}
 request_message = {}
 close_connection = {}
-log = {"response": "", "request": "", "time": ""}
+last_event = {}
 
 def main():
     while True:
-        readable, writable, exceptional = select.select(inputs, outputs, inputs)
+        readable, writable, exceptional = select.select(inputs, outputs, inputs, TIMEOUT)
+
+        if not (readable or writable or exceptional):
+            for socket in inputs:
+                if socket != server:
+                    if check_timeout(socket):
+                        handle_connection_error(socket)
+            continue
+
         for s in readable:
             if s is server:
                 handle_new_connection(s)
@@ -46,6 +55,10 @@ def main():
 
 # --------------- Helper methods ----------------
 
+def check_timeout(socket):
+    if last_event[socket] + timedelta(seconds=TIMEOUT) < datetime.now():
+        return True
+
 def check_format(message):
     if re.match(REQ_PATTERN, message) or re.match(CONNECTION_PATTERN, message) or re.match(EOL_PATTERN, message):
         return True
@@ -57,9 +70,11 @@ def handle_new_connection(socket):
     inputs.append(connection)
     response_messages[connection] = queue.Queue()
     close_connection[connection] = True
+    last_event[connection] = datetime.now()
 
 def handle_existing_connection(socket):
     message = socket.recv(1024).decode()
+    last_event[socket] = datetime.now()
     if message:
         if request_message.get(socket) is None:
             request_message[socket] = message
@@ -67,7 +82,6 @@ def handle_existing_connection(socket):
             request_message[socket] += message
         if re.search(EOR_PATTERN, message) or re.match(EOL_PATTERN, message):
             whole_message = request_message[socket]
-            log["request"] = whole_message.strip()
             outputs.append(socket)
 
             req_file = ""
@@ -80,6 +94,7 @@ def handle_existing_connection(socket):
             responses = []
 
             for request in requests:
+                log = {"response": "", "request": "", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
                 for line in request.splitlines():
                     if not check_format(line):
                         if i < len(responses) - 1:
@@ -87,9 +102,12 @@ def handle_existing_connection(socket):
                         else:
                             responses.append("HTTP/1.0 400 Bad Request\r\n\r\n")
                         log["response"] = "HTTP/1.0 400 Bad Request"
+                        if not log["request"]:
+                            log["request"] = line.strip()
                         bad_request = True
                     else:
                         if re.match(REQ_PATTERN, line):
+                            log["request"] = line.strip()
                             req_file = re.match(REQ_PATTERN, line).group(1) if re.match(REQ_PATTERN, line).group(1) != "" else "index.html"
                             if exists(req_file):
                                 responses.append("HTTP/1.0 200 OK\r\n")
@@ -105,6 +123,7 @@ def handle_existing_connection(socket):
                                 close_connection[socket] = False
                             elif connection.lower() == "close":
                                 close_connection[socket] = True
+                print(f"{log['time']}: {ip_address}:{port_number} {log['request']}; {log['response']}")
                 c = "close" if close_connection[socket] or not connection_header else "keep-alive"
                 responses[i] += f"Connection: {c}\r\n\r\n" if not bad_request else ""
                 if file_found:
@@ -130,11 +149,11 @@ def write_back_response(socket):
     else:
         msg = next_msg.encode()
         socket.send(msg)
+        last_event[socket] = datetime.now()
         if(close_connection[socket] and response_messages[socket].empty()):
-            log["time"] = datetime.now().strftime('%A %d-%m-%Y, %H:%M:%S')
-            print(f"{log['time']}: {ip_address}:{port_number} {log['request']}; {log['response']}")
             outputs.remove(socket)
             inputs.remove(socket)
+            last_event.pop(socket)
             socket.close()
 
 def handle_connection_error(socket):
