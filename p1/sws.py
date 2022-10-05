@@ -16,11 +16,8 @@ ip_address = sys.argv[1]
 port_number = int(sys.argv[2])
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
 server.setblocking(0)
-
 server.bind((ip_address, port_number))
-
 server.listen(5)
 
 inputs = [server]
