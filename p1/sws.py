@@ -92,7 +92,7 @@ def handle_existing_connection(socket):
             responses = []
 
             for request in requests:
-                log = {"response": "", "request": "", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+                log = {"response": "", "request": "", "time": datetime.now().strftime("%a %b %d %H:%M:%S PDT %Y")}
                 for line in request.splitlines():
                     if not check_format(line):
                         if i < len(responses) - 1:
