@@ -6,11 +6,12 @@ import re
 from datetime import datetime, timedelta
 from os.path import exists
 
-EOL_PATTERN = r'^(\r\n|\n)$'
+EOL_PATTERN = r'^(\r\n|\n)[2]$'
+TERMINAL_EOR_PATTERN = r'^(\r\n|\n)?$'
 EOR_PATTERN = r'.*(\r\n\r\n|\n\n)$'
 REQ_PATTERN = r'^GET\s\/(.*)\sHTTP\/1.0(\r\n|\n)?'
 CONNECTION_PATTERN = r'Connection:\s?(.*)\s*(\r\n|\n)?'
-TIMEOUT = 10.0
+TIMEOUT = 60.0
 
 ip_address = sys.argv[1]
 port_number = int(sys.argv[2])
@@ -77,7 +78,7 @@ def handle_existing_connection(socket):
             request_message[socket] = message
         else:
             request_message[socket] += message
-        if re.search(EOR_PATTERN, message) or re.match(EOL_PATTERN, message):
+        if re.search(EOR_PATTERN, message) or re.match(TERMINAL_EOR_PATTERN, message):
             whole_message = request_message[socket]
             outputs.append(socket)
 
@@ -120,7 +121,7 @@ def handle_existing_connection(socket):
                                 close_connection[socket] = False
                             elif connection.lower() == "close":
                                 close_connection[socket] = True
-                print(f"{log['time']}: {ip_address}:{port_number} {log['request']}; {log['response']}")
+                print(f"{log['time']}: {socket.getpeername()[0]}:{port_number} {log['request']}; {log['response']}")
                 c = "close" if close_connection[socket] or not connection_header else "keep-alive"
                 responses[i] += f"Connection: {c}\r\n\r\n" if not bad_request else ""
                 if file_found:
@@ -135,12 +136,14 @@ def handle_existing_connection(socket):
                 req_file = ""
                 i += 1
                 connection_header = False
+                request_message[socket] = ""
             for response in responses:
                 response_messages[socket].put(response)
 
 def write_back_response(socket):
     try:
         next_msg = response_messages[socket].get_nowait()
+        
     except queue.Empty:
         outputs.remove(socket)
     else:
