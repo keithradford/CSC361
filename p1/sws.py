@@ -143,7 +143,7 @@ def handle_existing_connection(socket):
 def write_back_response(socket):
     try:
         next_msg = response_messages[socket].get_nowait()
-        
+
     except queue.Empty:
         outputs.remove(socket)
     else:
