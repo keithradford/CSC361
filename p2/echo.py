@@ -17,7 +17,6 @@ def main():
 
     while True:
         msg, address = sock.recvfrom(8192)
-        print("sending", msg, address)
         sock.sendto(msg, address)
 
 

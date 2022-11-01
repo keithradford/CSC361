@@ -25,10 +25,7 @@ with open(read_file_name, "r") as f:
 udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 # Initialize a queue for the sending buffer
-snd_buff = bytearray(1024)
-
-# Initialize the receiving buffer
-rcv_buff = bytearray(2048)
+snd_buff = bytearray(2048)
 
 # Packet format
 # CMD
@@ -108,6 +105,7 @@ class rdp_sender:
     def __init__(self):
         self._state = State.CLOSED
         self._ack = 0
+        self._window = 0
 
     def _send(self):
         if self._state == State.SYN_SENT:
@@ -117,8 +115,10 @@ class rdp_sender:
             # If all the data has been sent, close
             if self._ack >= len(file_data):
                 self.close()
-            # Get first 1024 bytes offset by ack of file_data
-            payload = file_data[(self._ack - 1):(self._ack - 1) + 1024]
+
+            max_send = min(self._window, 1024)
+            # Get the next max_send bytes of data
+            payload = file_data[self._ack - 2:self._ack + max_send - 2]
             packet = create_packet("DAT", self._ack, payload=payload)
             write_to_byte_array(snd_buff, packet)
         if self._state == State.FIN_SENT:
@@ -134,6 +134,7 @@ class rdp_sender:
         command, seq_num, ack_num, window, payload = parse_packet(ack)
         receive_log(command, True, ack_num=ack_num, window=window)
         self._ack = ack_num
+        self._window = window
         if self._state == State.SYN_SENT:
             self._state = State.OPEN
             self._send()
@@ -156,17 +157,27 @@ class rdp_sender:
 class rdp_receiver:
     def __init__(self):
         self._window = 2048
+        self._rcv_buff = ""
 
     def receive_data(self, data):
         command, seq_num, ack_num, window, payload = parse_packet(data)
         receive_log(command, False, seq_num=seq_num, length=len(payload))
         # Decrease the window
         self._window -= len(payload)
-        # Write to file
-        if(len(payload) > 0):
+        # If the window is 0, empty the buffer to file
+        if self._window == 0 and len(payload) > 0 or command == "FIN":
+            # Write to file
             with open(write_file_name, "a") as f:
-                f.write(payload)
-        packet = create_packet("ACK", ack_num=2049 - self._window, window=self._window)
+                # f.write("NEW CHUNK")
+                f.write(self._rcv_buff)
+            # Reset the buffer
+            self._rcv_buff = ""
+            # Reset the window
+            self._window = 2048
+        elif len(payload) > 0:
+            # Add to buffer
+            self._rcv_buff += payload
+        packet = create_packet("ACK", ack_num=(2049 - self._window) + seq_num, window=self._window)
         send_packet(packet.encode(), False)
 
 def main():
@@ -179,7 +190,6 @@ def main():
 
         if udp_sock in readable:
             message, _ = udp_sock.recvfrom(8192)
-            write_to_byte_array(rcv_buff, message)
             command, seq_num, ack_num, window, payload = parse_packet(message)
             if command == "ACK":
                 sender.receive_ack(message)
