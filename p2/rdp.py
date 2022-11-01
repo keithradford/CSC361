@@ -1,4 +1,10 @@
-# Reliable Datagram Protocol
+'''
+Reliable Datagram Protocol (RDP)
+
+A reliable layer on top of UDP. It provides the data transfer between two hosts, the sender and the receiver.
+Given an input file, the sender will read the file and send it to the receiver. The receiver will write the data to an output file.
+'''
+
 from datetime import datetime
 import socket
 import select
@@ -14,12 +20,10 @@ port_number = int(sys.argv[2])
 read_file_name = sys.argv[3]
 write_file_name = sys.argv[4]
 
-# pipe file into string that i can keep track of using ACK, SEQ numbers
-
 # Read file into string
-file_data = ""
+FILE_DATA = ""
 with open(read_file_name, "r") as f:
-    file_data += f.read()
+    FILE_DATA += f.read()
 
 # Initialize a UDP socket
 udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -27,13 +31,27 @@ udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 # Initialize a queue for the sending buffer
 snd_buff = bytearray(2048)
 
-# Packet format
-# CMD
-# Header: value
-# Header: value
-#
-# PAYLOAD
 def create_packet(command, seq_num=-1, ack_num=-1, payload=None, window=-1):
+    '''
+    Create a packet with the given information.
+
+    Parameters:
+        command (str): The command of the packet.
+        seq_num (int): The sequence number of the packet.
+        ack_num (int): The acknowledgement number of the packet.
+        payload (str): The payload of the packet.
+        window (int): The window size of the packet.
+
+    Returns:
+        packet (string): The packet in string format:
+
+        CMD
+        Header: value
+        Header: value
+
+        PAYLOAD
+    '''
+
     packet = f"{command}\r\n"
     if seq_num != -1:
         packet += f"Sequence: {seq_num}\r\n"
@@ -50,12 +68,35 @@ def create_packet(command, seq_num=-1, ack_num=-1, payload=None, window=-1):
     return packet
 
 def send_packet(packet, sender=True):
+    '''
+    Send a packet to the echo server. Additionally logs the information of the packet.
+
+    Parameters:
+        packet (string): The packet to send.
+        sender (bool): Whether the packet is sent by the sender or receiver.
+
+    Returns:
+        bytes_sent (int): The number of bytes sent.
+    '''
+
     command, seq_num, ack_num, window, payload = parse_packet(packet)
     send_log(command, sender, seq_num, len(payload if payload else ""), ack_num, window)
     bytes_sent = udp_sock.sendto(packet, (ip_address, 8888))
     return bytes_sent
 
 def receive_log(command, sender=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
+    '''
+    Log the information of the received packet.
+
+    Parameters:
+        command (str): The command of the packet.
+        sender (bool): Whether the packet is sent by the sender or receiver.
+        seq_num (int): The sequence number of the packet.
+        length (int): The length of the payload of the packet.
+        ack_num (int): The acknowledgement number of the packet.
+        window (int): The window size of the packet.
+    '''
+
     # Format the current time
     time = datetime.now().strftime("%a %b %d %H:%M:%S PDT %Y")
     if sender:
@@ -64,6 +105,18 @@ def receive_log(command, sender=True, seq_num=-1, length=-1, ack_num=-1, window=
         print(f"{time}: Receive; {command}; Sequence: {seq_num}; Length: {length}")
 
 def send_log(command, sender=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
+    '''
+    Log the information of the sent packet.
+
+    Parameters:
+        command (str): The command of the packet.
+        sender (bool): Whether the packet is sent by the sender or receiver.
+        seq_num (int): The sequence number of the packet.
+        length (int): The length of the payload of the packet.
+        ack_num (int): The acknowledgement number of the packet.
+        window (int): The window size of the packet.
+    '''
+
     # Format the current time
     time = datetime.now().strftime("%a %b %d %H:%M:%S PDT %Y")
     if sender:
@@ -72,11 +125,34 @@ def send_log(command, sender=True, seq_num=-1, length=-1, ack_num=-1, window=-1)
         print(f"{time}: Send; {command}; Acknowledgement: {ack_num}; Window: {window}")
 
 def write_to_byte_array(byte_array, data, offset=0):
+    '''
+    Write the data to the byte array at the given offset.
+
+    Parameters:
+        byte_array (bytearray): The byte array to write to.
+        data (str): The data to write.
+        offset (int): The offset to write to.
+    '''
+
     for i in range(len(data)):
         curr = data[i] if type(data[i]) is int else ord(data[i])
         byte_array[offset + i] = curr
 
 def parse_packet(packet):
+    '''
+    Parse the packet and return the information of the packet.
+
+    Parameters:
+        packet (string): The packet to parse.
+
+    Returns:
+        command (str): The command of the packet.
+        seq_num (int): The sequence number of the packet.
+        ack_num (int): The acknowledgement number of the packet.
+        window (int): The window size of the packet.
+        payload (str): The payload of the packet.
+    '''
+
     lines = packet.decode("utf-8").split("\r\n")
     command = lines[0]
     seq_num = -1
@@ -96,12 +172,19 @@ def parse_packet(packet):
     return command, seq_num, ack_num, window, payload
 
 class State(Enum):
+    '''
+    The state of the sender.
+    '''
     CLOSED = 0
     SYN_SENT = 1
     OPEN = 2
     FIN_SENT = 3
 
 class rdp_sender:
+    '''
+    The sender of the reliable data transfer protocol.
+    '''
+
     def __init__(self):
         self._state = State.CLOSED
         self._ack = 0
@@ -113,12 +196,12 @@ class rdp_sender:
             write_to_byte_array(snd_buff, packet)
         if self._state == State.OPEN:
             # If all the data has been sent, close
-            if self._ack >= len(file_data):
+            if self._ack >= len(FILE_DATA):
                 self.close()
 
             max_send = min(self._window, 1024)
             # Get the next max_send bytes of data
-            payload = file_data[(self._ack - 1):self._ack + max_send - 1]
+            payload = FILE_DATA[(self._ack - 1):self._ack + max_send - 1]
             packet = create_packet("DAT", self._ack, payload=payload)
             write_to_byte_array(snd_buff, packet)
         if self._state == State.FIN_SENT:
@@ -126,12 +209,20 @@ class rdp_sender:
             write_to_byte_array(snd_buff, packet)
 
     def open(self):
+        '''
+        Open the connection.
+        '''
+
         self._state = State.SYN_SENT
         self._send()
 
     def receive_ack(self, ack):
+        '''
+        Receive an acknowledgement.
+        '''
+
         # Parse ack
-        command, seq_num, ack_num, window, payload = parse_packet(ack)
+        command, _, ack_num, window, __ = parse_packet(ack)
         receive_log(command, True, ack_num=ack_num, window=window)
         self._ack = ack_num
         self._window = window
@@ -148,18 +239,34 @@ class rdp_sender:
         pass
 
     def close(self):
+        '''
+        Close the connection.
+        '''
+
         self._state = State.FIN_SENT
         self._send()
 
     def get_state(self):
+        '''
+        Get the state of the sender.
+        '''
+
         return self._state
 
 class rdp_receiver:
+    '''
+    The receiver of the reliable data transfer protocol.
+    '''
+
     def __init__(self):
         self._window = 2048
         self._rcv_buff = ""
 
     def receive_data(self, data):
+        '''
+        Receive data from the sender.
+        '''
+
         command, seq_num, ack_num, window, payload = parse_packet(data)
         receive_log(command, False, seq_num=seq_num, length=len(payload))
         # Decrease the window
@@ -168,7 +275,6 @@ class rdp_receiver:
         if self._window == 0 and len(payload) > 0 or command == "FIN":
             # Write to file
             with open(write_file_name, "a") as f:
-                # f.write("NEW CHUNK")
                 f.write(self._rcv_buff)
             # Reset the buffer and window
             self._rcv_buff = ""
@@ -181,6 +287,10 @@ class rdp_receiver:
         send_packet(packet.encode(), False)
 
 def main():
+    '''
+    The main function.
+    '''
+
     sender = rdp_sender()
     receiver = rdp_receiver()
     sender.open()
@@ -190,7 +300,7 @@ def main():
 
         if udp_sock in readable:
             message, _ = udp_sock.recvfrom(8192)
-            command, seq_num, ack_num, window, payload = parse_packet(message)
+            command, _, __, ___, ____ = parse_packet(message)
             if command == "ACK":
                 sender.receive_ack(message)
             else:
