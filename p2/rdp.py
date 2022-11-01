@@ -118,7 +118,7 @@ class rdp_sender:
 
             max_send = min(self._window, 1024)
             # Get the next max_send bytes of data
-            payload = file_data[self._ack - 2:self._ack + max_send - 2]
+            payload = file_data[(self._ack - 1):self._ack + max_send - 1]
             packet = create_packet("DAT", self._ack, payload=payload)
             write_to_byte_array(snd_buff, packet)
         if self._state == State.FIN_SENT:
@@ -170,14 +170,14 @@ class rdp_receiver:
             with open(write_file_name, "a") as f:
                 # f.write("NEW CHUNK")
                 f.write(self._rcv_buff)
-            # Reset the buffer
+            # Reset the buffer and window
             self._rcv_buff = ""
-            # Reset the window
             self._window = 2048
-        elif len(payload) > 0:
+        if len(payload) > 0:
             # Add to buffer
             self._rcv_buff += payload
-        packet = create_packet("ACK", ack_num=(2049 - self._window) + seq_num, window=self._window)
+        padding = len(payload) - 1 if len(payload) > 0 else 0
+        packet = create_packet("ACK", ack_num=seq_num + padding + 1, window=self._window)
         send_packet(packet.encode(), False)
 
 def main():
