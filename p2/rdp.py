@@ -13,81 +13,90 @@ ip_address = sys.argv[1]
 port_number = int(sys.argv[2])
 read_file_name = sys.argv[3]
 write_file_name = sys.argv[4]
-data = []
 
-# # Initialize a UDP socket
+# pipe file into string that i can keep track of using ACK, SEQ numbers
+
+# Read file into string
+file_data = ""
+with open(read_file_name, "r") as f:
+    file_data += f.read()
+
+# Initialize a UDP socket
 udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-# Initialize the sending buffer as an array
+# Initialize a queue for the sending buffer
 snd_buff = bytearray(1024)
 
 # Initialize the receiving buffer
-rcv_buff = bytearray(1024)
+rcv_buff = bytearray(2048)
 
-# Read data from file
-with open(read_file_name, 'rb') as f:
-    data += f.read()
-
-def create_packet(command, seq_num=-1, ack_num=-1, payload=None):
+# Packet format
+# CMD
+# Header: value
+# Header: value
+#
+# PAYLOAD
+def create_packet(command, seq_num=-1, ack_num=-1, payload=None, window=-1):
     packet = f"{command}\r\n"
     if seq_num != -1:
         packet += f"Sequence: {seq_num}\r\n"
     if ack_num != -1:
         packet += f"Acknowledgment: {ack_num}\r\n"
+    if window != -1:
+        packet += f"Window: {window}\r\n\r\n"
     if payload is not None:
         packet += f"Length: {len(payload)}\r\n\r\n"
         packet += f"{payload}\r\n"
+    elif window == -1:
+        packet += "Length: 0\r\n\r\n"
 
     return packet
 
-# Helper method to check if a message is complete
-def is_complete(message):
-    return True
+def send_packet(packet, sender=True):
+    command, seq_num, ack_num, window, payload = parse_packet(packet)
+    send_log(command, sender, seq_num, len(payload if payload else ""), ack_num, window)
+    bytes_sent = udp_sock.sendto(packet, (ip_address, 8888))
+    return bytes_sent
 
-# Helper method to check if a message can be recognized
-def is_recognizable(message):
-    return True
+def receive_log(command, sender=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
+    # Format the current time
+    time = datetime.now().strftime("%a %b %d %H:%M:%S PDT %Y")
+    if sender:
+        print(f"{time}: Receive; {command}; Acknowledgement: {ack_num}; Window: {window}")
+    else:
+        print(f"{time}: Receive; {command}; Sequence: {seq_num}; Length: {length}")
 
-# Helper function to write to a byte array
+def send_log(command, sender=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
+    # Format the current time
+    time = datetime.now().strftime("%a %b %d %H:%M:%S PDT %Y")
+    if sender:
+        print(f"{time}: Send; {command}; Sequence: {seq_num}; Length: {length}")
+    else:
+        print(f"{time}: Send; {command}; Acknowledgement: {ack_num}; Window: {window}")
+
 def write_to_byte_array(byte_array, data, offset=0):
     for i in range(len(data)):
         curr = data[i] if type(data[i]) is int else ord(data[i])
         byte_array[offset + i] = curr
-
-def log(command, send=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
-    # Format the current time
-    time = datetime.now().strftime("%a %b %d %H:%M:%S PDT %Y")
-    if send:
-        print(f"{time}: Send; {command}; Sequence: {seq_num}; Length: {length}")
-    else:
-        print(f"{time}: Receive; {command}; Acknowledgement: {ack_num}; Window: {window}")
-
-def send_packet(packet):
-    bytes_sent = udp_sock.sendto(packet, (ip_address, 8888))
-    return bytes_sent
-
-def is_ack(message):
-    msg = message.decode("utf-8")
-    return msg.startswith("ACK")
 
 def parse_packet(packet):
     lines = packet.decode("utf-8").split("\r\n")
     command = lines[0]
     seq_num = -1
     ack_num = -1
+    window = -1
     payload = None
     for line in lines:
         if line.startswith("Sequence"):
             seq_num = int(line.split(": ")[1])
         elif line.startswith("Acknowledgment"):
             ack_num = int(line.split(": ")[1])
+        elif line.startswith("Window"):
+            window = int(line.split(": ")[1])
         elif line.startswith("Length"):
-            payload = lines[-1]
+            payload = lines[-2]
 
-    return command, seq_num, ack_num, payload
-
-def space_remaining(byte_arrary):
-    return byte_arrary.count(0)
+    return command, seq_num, ack_num, window, payload
 
 class State(Enum):
     CLOSED = 0
@@ -98,30 +107,22 @@ class State(Enum):
 class rdp_sender:
     def __init__(self):
         self._state = State.CLOSED
+        self._ack = 0
 
     def _send(self):
         if self._state == State.SYN_SENT:
-            # Write SYN rdp packet into snd_buff
-            packet = create_packet("SYN")
-            print("Sender Sent SYN")
+            packet = create_packet("SYN", 0)
             write_to_byte_array(snd_buff, packet)
-
-        elif self._state == State.OPEN:
-            # if all data has been sent, call self.close()
-            if len(data) == 0:
+        if self._state == State.OPEN:
+            # If all the data has been sent, close
+            if self._ack >= len(file_data):
                 self.close()
-                return
-
-            # Write DAT rdp packet into snd_buff
-            packet = create_packet("DAT", payload=data[:1024], seq_num=0)
-            print("Sender Sent DAT")
-            write_to_byte_array(snd_buff, packet, offset=100)
-            print("Asfgijsd", snd_buff)
-            # Remove from data
-            data[:1024] = []
-        elif self._state == State.FIN_SENT:
-            # Write FIN rdp packet into snd_buff
-            packet = create_packet("FIN")
+            # Get first 1024 bytes offset by ack of file_data
+            payload = file_data[(self._ack - 1):(self._ack - 1) + 1024]
+            packet = create_packet("DAT", self._ack, payload=payload)
+            write_to_byte_array(snd_buff, packet)
+        if self._state == State.FIN_SENT:
+            packet = create_packet("FIN", self._ack)
             write_to_byte_array(snd_buff, packet)
 
     def open(self):
@@ -129,30 +130,23 @@ class rdp_sender:
         self._send()
 
     def receive_ack(self, ack):
-        # log("ACK", send=False)
-        command, __, ack_num, ___ = parse_packet(ack)
-        print("Sender Receive", command, self._state)
+        # Parse ack
+        command, seq_num, ack_num, window, payload = parse_packet(ack)
+        receive_log(command, True, ack_num=ack_num, window=window)
+        self._ack = ack_num
         if self._state == State.SYN_SENT:
-            # if acknowledgement number is correct, change state to OPEN
-            _, __, ack_num, ___ = parse_packet(ack)
-            if ack_num == 0:
-                self._state = State.OPEN
-        elif self._state == State.OPEN:
-            # if three duplicate ACKs are received, resend packets
-            # if acknowledgement number is correct, move the sliding window, call self.send()
+            self._state = State.OPEN
             self._send()
-        elif self._state == State.FIN_SENT:
-            # if acknowledgement number is correct, change state to CLOSED
+        if self._state == State.FIN_SENT:
             self._state = State.CLOSED
+            exit(0)
+        if self._state == State.OPEN:
+            self._send()
 
     def timeout(self):
-        if self._state != State.CLOSED:
-            # Rewrite the rdp packets in snd_buff
-            pass
         pass
 
     def close(self):
-        # Write FIN rdp packet into snd_buff
         self._state = State.FIN_SENT
         self._send()
 
@@ -161,33 +155,21 @@ class rdp_sender:
 
 class rdp_receiver:
     def __init__(self):
-        self._state = State.CLOSED
-
-    def send(self, data):
-        pass
-
-    def receive(self):
-        pass
-
-    def open(self):
-        pass
+        self._window = 2048
 
     def receive_data(self, data):
-        # Parse packet
-        command, seq_num, ack_num, payload = parse_packet(data)
-        print("Receiver Receive", command)
-        # log(command, send=False)
-        self._state = State.OPEN
-        packet = create_packet("ACK", ack_num=0)
-        print("Receiver Sent ACK")
-        send_packet(packet.encode())
-        # log("ACK", send=True)
-
-    def get_state(self):
-        return self._state
+        command, seq_num, ack_num, window, payload = parse_packet(data)
+        receive_log(command, False, seq_num=seq_num, length=len(payload))
+        # Decrease the window
+        self._window -= len(payload)
+        # Write to file
+        if(len(payload) > 0):
+            with open(write_file_name, "a") as f:
+                f.write(payload)
+        packet = create_packet("ACK", ack_num=2049 - self._window, window=self._window)
+        send_packet(packet.encode(), False)
 
 def main():
-    # Create a rdp_sender object
     sender = rdp_sender()
     receiver = rdp_receiver()
     sender.open()
@@ -195,45 +177,23 @@ def main():
     while True:
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
 
-        # print("readable: ", readable)
-        # print("writable: ", writable)
-        # print("exceptional: ", exceptional)
-
         if udp_sock in readable:
-            message, address = udp_sock.recvfrom(8192)
+            message, _ = udp_sock.recvfrom(8192)
             write_to_byte_array(rcv_buff, message)
-            # print(rcv_buff)
-
-            # if message cannot be recognized
-            if not is_recognizable(message):
-                # write RST packet into snd_buff
-                pass
-
-            # if message in rcv_buf is complete
-            if is_complete(message):
-                # if message is ACK
-                if is_ack(message):
-                    sender.receive_ack(message)
-                else:
-                    receiver.receive_data(message)
+            command, seq_num, ack_num, window, payload = parse_packet(message)
+            if command == "ACK":
+                sender.receive_ack(message)
+            else:
+                receiver.receive_data(message)
 
         if udp_sock in writable:
-            bytes_sent = send_packet(snd_buff)
-            # log("SYN", True)
-            # print(f"Sent {bytes_sent} bytes")
+            # If snd_buff is not all 0s, send it then empty it
+            if any(snd_buff):
+                send_packet(snd_buff)
+                snd_buff[:] = [0] * len(snd_buff)
 
         if udp_sock in exceptional:
-            sender.close()
-            receiver.close()
-            break
+            print("exceptional")
 
-        if sender.get_state() == State.CLOSED:
-            break
-
-        if not(readable or writable or exceptional):
-            if receiver.get_state() == State.CLOSED and sender.get_state() == State.CLOSED:
-                break
-            sender.timeout()
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
