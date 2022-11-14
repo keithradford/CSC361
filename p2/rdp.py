@@ -27,6 +27,8 @@ with open(read_file_name, "r") as f:
 
 # Initialize a UDP socket
 udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+udp_sock.bind((ip_address, port_number))
+udp_sock.connect(("h2", 8888))
 
 # Initialize a queue for the sending buffer
 snd_buff = bytearray(2048)
@@ -81,7 +83,7 @@ def send_packet(packet, sender=True):
 
     command, seq_num, ack_num, window, payload = parse_packet(packet)
     send_log(command, sender, seq_num, len(payload if payload else ""), ack_num, window)
-    bytes_sent = udp_sock.sendto(packet, (ip_address, 8888))
+    bytes_sent = udp_sock.send(packet)
     return bytes_sent
 
 def receive_log(command, sender=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
@@ -299,7 +301,7 @@ def main():
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
 
         if udp_sock in readable:
-            message, _ = udp_sock.recvfrom(8192)
+            message, _ = udp_sock.recv(8192)
             command, _, __, ___, ____ = parse_packet(message)
             if command == "ACK":
                 sender.receive_ack(message)
