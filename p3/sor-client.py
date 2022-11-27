@@ -121,7 +121,6 @@ def main():
 
     # Initialize UDP socket and bind to server IP address and port number
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp_sock.bind((server_ip_address, server_udp_port_number))
 
     # Create two dictionaries: sending buffer and receiving buffer
     # Key: client address
@@ -135,11 +134,12 @@ def main():
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
 
         if udp_sock in readable:
-            message, client_address = udp_sock.recvfrom(client_buffer_size)
-            print("Received message from " + str(client_address) + ": " + message.decode())
+            message, client_address = udp_sock.recvfrom(1024)
+            print("Client received message from " + str(client_address) + ": " + message.decode())
 
         if udp_sock in writable:
-            print("writable")
+            msg = "Hello from client"
+            udp_sock.sendto(msg.encode(), (server_ip_address, server_udp_port_number))
 
         if udp_sock in exceptional:
             print("exceptional")
