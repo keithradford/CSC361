@@ -1,6 +1,101 @@
-# python3 sor-client.py server_ip_address server_udp_port_number client_buffer_size client_payload_length read_file_name write_file_name [read_file_name write_file_name]*
-# If there are multiple pairs of read_file_name and write_file_name in the command line, it indicates that the SoR client shall request these files from the SoR server in a persistent HTTP session over an RDP connection
+"""
+python3 sor-client.py server_ip_address server_udp_port_number client_buffer_size client_payload_length read_file_name write_file_name [read_file_name write_file_name]*
+If there are multiple pairs of read_file_name and write_file_name in the command line, it indicates that the SoR client shall request these files from the SoR server in a persistent HTTP session over an RDP connection
+"""
+
 import sys
+import socket
+import select
+from enum import Enum
+
+class State(Enum):
+    CLOSED = 0
+    SYN_SENT = 1
+    SYN_RCVD = 2
+    CONNECTED = 3
+    FIN_SENT = 4
+    FIN_RCVD_1 = 5
+    FIN_RCVD_2 = 6
+
+class RDP:
+    '''
+    An abstraction of the reliable data transfer protocol.
+    '''
+
+    def __init__(self):
+        self._state = State.CLOSED
+        self._ack = 0
+        self._window = 0
+
+    def _send(self):
+        if self._state == State.SYN_RCVD:
+            pass
+        if self._state == State.SYN_SENT:
+            # packet = create_packet("SYN", 0)
+            # write_to_byte_array(snd_buff, packet)
+            pass
+        if self._state == State.CONNECTED:
+            # If all the data has been sent, close
+            # if self._ack >= len(FILE_DATA):
+                # self.close()
+
+            max_send = min(self._window, 1024)
+            # Get the next max_send bytes of data
+            # payload = FILE_DATA[(self._ack - 1):self._ack + max_send - 1]
+            # packet = create_packet("DAT", self._ack, payload=payload)
+            # write_to_byte_array(snd_buff, packet)
+        if self._state == State.FIN_SENT:
+            # packet = create_packet("FIN", self._ack)
+            # write_to_byte_array(snd_buff, packet)
+            pass
+        if self._state == State.FIN_RCVD_1:
+            pass
+        if self._state == State.FIN_RCVD_2:
+            pass
+
+    def open(self):
+        '''
+        Open the connection.
+        '''
+
+        self._state = State.SYN_SENT
+        self._send()
+
+    def receive_ack(self, ack):
+        '''
+        Receive an acknowledgement.
+        '''
+
+        # Parse ack
+        # command, _, ack_num, window, __ = parse_packet(ack)
+        # receive_log(command, True, ack_num=ack_num, window=window)
+        # self._ack = ack_num
+        # self._window = window
+        if self._state == State.SYN_SENT:
+            self._state = State.OPEN
+            self._send()
+        if self._state == State.FIN_SENT:
+            self._state = State.CLOSED
+            exit(0)
+        if self._state == State.OPEN:
+            self._send()
+
+    def timeout(self):
+        pass
+
+    def close(self):
+        '''
+        Close the connection.
+        '''
+
+        self._state = State.FIN_SENT
+        self._send()
+
+    def get_state(self):
+        '''
+        Get the state of the sender.
+        '''
+
 
 def main():
     # Check for correct number of arguments
@@ -23,6 +118,31 @@ def main():
     print("Client payload length: " + str(client_payload_length))
     print("Read file name: " + read_file_name)
     print("Write file name: " + write_file_name)
+
+    # Initialize UDP socket and bind to server IP address and port number
+    udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    udp_sock.bind((server_ip_address, server_udp_port_number))
+
+    # Create two dictionaries: sending buffer and receiving buffer
+    # Key: client address
+    # Value: queue or string
+    snd_buff = {}
+    rcv_buff = {}
+
+    rdp = RDP()
+
+    while True:
+        readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
+
+        if udp_sock in readable:
+            message, client_address = udp_sock.recvfrom(client_buffer_size)
+            print("Received message from " + str(client_address) + ": " + message.decode())
+
+        if udp_sock in writable:
+            print("writable")
+
+        if udp_sock in exceptional:
+            print("exceptional")
 
 if __name__ == "__main__":
     main()
