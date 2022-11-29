@@ -17,9 +17,9 @@ class State(Enum):
     FIN_RCVD_1 = 5
     FIN_RCVD_2 = 6
 
-class RDP:
+class rdp_sender:
     '''
-    An abstraction of the reliable data transfer protocol.
+    The sender of the reliable data transfer protocol
     '''
 
     def __init__(self):
@@ -96,6 +96,39 @@ class RDP:
         Get the state of the sender.
         '''
 
+class rdp_receiver:
+    '''
+    The receiver of the reliable data transfer protocol.
+    '''
+
+    def __init__(self):
+        self._window = 2048
+        self._rcv_buff = ""
+
+    def receive_data(self, data):
+        '''
+        Receive data from the sender.
+        '''
+
+        # command, seq_num, ack_num, window, payload = parse_packet(data)
+        # receive_log(command, False, seq_num=seq_num, length=len(payload))
+        # Decrease the window
+        # self._window -= len(payload)
+        # If the window is 0, empty the buffer to file
+        # if self._window == 0 and len(payload) > 0 or command == "FIN":
+            # Write to file
+            # with open(write_file_name, "a") as f:
+            #     f.write(self._rcv_buff)
+            # Reset the buffer and window
+            # self._rcv_buff = ""
+            # self._window = 2048
+        # if len(payload) > 0:
+            # Add to buffer
+        #     self._rcv_buff += payload
+        # padding = len(payload) - 1 if len(payload) > 0 else 0
+        # packet = create_packet("ACK", ack_num=seq_num + padding + 1, window=self._window)
+        # send_packet(packet.encode(), False)
+        pass
 
 def main():
     # Check for correct number of arguments
@@ -128,7 +161,8 @@ def main():
     snd_buff = {}
     rcv_buff = {}
 
-    rdp = RDP()
+    sender = rdp_sender()
+    receiver = rdp_receiver()
 
     while True:
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
