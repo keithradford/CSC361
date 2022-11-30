@@ -8,127 +8,180 @@ import socket
 import select
 from enum import Enum
 
+server_ip_address = sys.argv[1]
+server_udp_port_number = int(sys.argv[2])
+client_buffer_size = int(sys.argv[3])
+client_payload_length = int(sys.argv[4])
+read_file_name = sys.argv[5]
+write_file_name = sys.argv[6]
+
 class State(Enum):
     CLOSED = 0
     SYN_SENT = 1
     SYN_RCVD = 2
     CONNECTED = 3
     FIN_SENT = 4
-    FIN_RCVD_1 = 5
-    FIN_RCVD_2 = 6
+    FIN_RCVD = 5
+    CON_FIN_RCVD = 6
 
-class rdp_sender:
+buff = []
+
+def process_response(response):
+    '''
+    Processes a HTTP response and returns the payload
+    '''
+    lines = response.splitlines()
+    payload = ""
+    for line in lines:
+        if line.startswith("HTTP") or line.startswith("Connection") or line.startswith("Content-Length"):
+            continue
+        payload += line
+
+    return payload
+
+class RDP:
     '''
     The sender of the reliable data transfer protocol
     '''
 
-    def __init__(self):
+    def __init__(self, window):
         self._state = State.CLOSED
+        self._seq = 0
+        self._window = window
+        self._data = ""
         self._ack = 0
-        self._window = 0
 
-    def _send(self):
-        if self._state == State.SYN_RCVD:
-            pass
-        if self._state == State.SYN_SENT:
-            # packet = create_packet("SYN", 0)
-            # write_to_byte_array(snd_buff, packet)
-            pass
-        if self._state == State.CONNECTED:
-            # If all the data has been sent, close
-            # if self._ack >= len(FILE_DATA):
-                # self.close()
-
-            max_send = min(self._window, 1024)
-            # Get the next max_send bytes of data
-            # payload = FILE_DATA[(self._ack - 1):self._ack + max_send - 1]
-            # packet = create_packet("DAT", self._ack, payload=payload)
-            # write_to_byte_array(snd_buff, packet)
-        if self._state == State.FIN_SENT:
-            # packet = create_packet("FIN", self._ack)
-            # write_to_byte_array(snd_buff, packet)
-            pass
-        if self._state == State.FIN_RCVD_1:
-            pass
-        if self._state == State.FIN_RCVD_2:
-            pass
-
-    def open(self):
-        '''
-        Open the connection.
-        '''
-
-        self._state = State.SYN_SENT
-        self._send()
-
-    def receive_ack(self, ack):
-        '''
-        Receive an acknowledgement.
-        '''
-
-        # Parse ack
-        # command, _, ack_num, window, __ = parse_packet(ack)
-        # receive_log(command, True, ack_num=ack_num, window=window)
-        # self._ack = ack_num
-        # self._window = window
-        if self._state == State.SYN_SENT:
-            self._state = State.OPEN
-            self._send()
-        if self._state == State.FIN_SENT:
-            self._state = State.CLOSED
-            exit(0)
-        if self._state == State.OPEN:
-            self._send()
+        # Create initial HTTP request
+        request = "GET /" + read_file_name + " HTTP/1.0\r\n"
+        request += "Connection: keep-alive\r\n"
+        self.send_packet(["SYN", "ACK", "DAT"], 0, -1, self._window, request)
 
     def timeout(self):
         pass
 
-    def close(self):
+    def create_packet(self, commands, seq_num=-1, ack_num=-1, window=-1, payload=""):
         '''
-        Close the connection.
+        Create a packet from the given components.
         '''
+        payload_length = len(payload) if payload else 0
+        packet = "|".join(commands) + "\n"
+        packet += "Sequence: " + str(seq_num) + "\n"
+        packet += "Length: " + str(payload_length) + "\n"
+        packet += "Acknowledgement: " + str(ack_num) + "\n"
+        packet += "Window: " + str(window) + "\n"
+        packet += "\n" + payload if payload else ""
 
-        self._state = State.FIN_SENT
-        self._send()
+        return packet.encode()
 
-    def get_state(self):
+    def parse_packet(self, packet):
         '''
-        Get the state of the sender.
-        '''
-
-class rdp_receiver:
-    '''
-    The receiver of the reliable data transfer protocol.
-    '''
-
-    def __init__(self):
-        self._window = 2048
-        self._rcv_buff = ""
-
-    def receive_data(self, data):
-        '''
-        Receive data from the sender.
+        Parse a packet into its components.
         '''
 
-        # command, seq_num, ack_num, window, payload = parse_packet(data)
-        # receive_log(command, False, seq_num=seq_num, length=len(payload))
-        # Decrease the window
-        # self._window -= len(payload)
-        # If the window is 0, empty the buffer to file
-        # if self._window == 0 and len(payload) > 0 or command == "FIN":
-            # Write to file
-            # with open(write_file_name, "a") as f:
-            #     f.write(self._rcv_buff)
-            # Reset the buffer and window
-            # self._rcv_buff = ""
-            # self._window = 2048
-        # if len(payload) > 0:
-            # Add to buffer
-        #     self._rcv_buff += payload
-        # padding = len(payload) - 1 if len(payload) > 0 else 0
-        # packet = create_packet("ACK", ack_num=seq_num + padding + 1, window=self._window)
-        # send_packet(packet.encode(), False)
-        pass
+        lines = packet.decode().splitlines()
+        commands = lines[0].split("|")
+        # Sequence: #
+        seq_num = int(lines[1].split(": ")[1])
+        # Length: #
+        length = int(lines[2].split(": ")[1])
+        # Acknowledgement: #
+        ack_num = int(lines[3].split(": ")[1])
+        # Window: #
+        window = int(lines[4].split(": ")[1])
+        # Payload = remaining lines
+        payload = "\n".join(lines[5:])
+
+        return commands, seq_num, length, ack_num, window, payload
+
+    def send_packet(self, commands, seq_num=-1, ack_num=-1, window=-1, payload=""):
+        if self._state == State.CLOSED:
+            if "SYN" in commands:
+                print("Going from CLOSED to SYN_SENT")
+                self._state = State.SYN_SENT
+        if self._state == State.SYN_RCVD:
+            if "SYN" in commands:
+                print("Going from SYN_RCVD to CONNECTED")
+                self._state = State.SYN_SENT
+        if self._state == State.FIN_RCVD:
+            if "FIN" in commands:
+                print("Going from FIN_RCVD to CLOSED")
+                self._state = State.FIN_SENT
+        if self._state == State.CONNECTED:
+            if "FIN" in commands:
+                print("Going from CONNECTED to FIN_SENT")
+                self._state = State.FIN_SENT
+        if self._state == State.CON_FIN_RCVD:
+            if "FIN" in commands:
+                print("Going from CON_FIN_RCVD to FIN_SENT")
+                self._state = State.FIN_SENT
+
+        packet = self.create_packet(commands, seq_num, ack_num, window, payload)
+        buff.append(packet)
+
+    def receive_packet(self, data):
+        commands, seq_num, length, ack_num, window, payload = self.parse_packet(data)
+        self._seq = ack_num if ack_num != -1 else self._seq
+        self._ack = seq_num + length + 1
+
+        # TODO: Handle DAT, detect correct ACK, send FINs
+
+        send_commands = []
+        if self._state == State.CLOSED:
+            if "SYN" in commands:
+                print("Going from CLOSED to SYN_RCVD")
+                send_commands.append("SYN")
+                self._state = State.SYN_RCVD
+            if "DAT" in commands:
+                send_commands.append("DAT")
+                self._data += process_response(payload.strip())
+        if self._state == State.SYN_RCVD:
+            if "FIN" in commands:
+                print("Going from SYN_RCVD to FIN_RCVD")
+                self._state = State.FIN_RCVD
+        if self._state == State.SYN_SENT:
+            if "ACK" in commands:
+                print("Going from SYN_SENT to CONNECTED")
+                self._state = State.CONNECTED
+            if "DAT" in commands:
+                send_commands.append("DAT")
+                self._data += process_response(payload.strip())
+        if self._state == State.CONNECTED:
+            if "FIN" in commands:
+                print("Going from CONNECTED to CON_FIN_RCVD")
+                self._state = State.CON_FIN_RCVD
+                send_commands.append("FIN")
+            if "DAT" in commands:
+                send_commands.append("DAT")
+                self._data += process_response(payload.strip())
+
+        # Send packet for first chunk of data
+        self.send_packet(send_commands + ["ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[:self._window])
+        # Send packets for remaining data
+        for i in range(self._window, len(self._data), self._window):
+            self.send_packet(["DAT", "ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[i:i+self._window])
+
+        if self._state == State.FIN_SENT:
+            if "ACK" in commands:
+                print("Going from FIN_SENT to CLOSED")
+                self._state = State.CLOSED
+                # Write data to file
+                with open(write_file_name, "w") as f:
+                    f.write(self._data)
+                # TODO: Replace this with timeout
+                sys.exit(0)
+
+
+    def package_data(self, data):
+        '''
+        Package data into packets of size <= window
+        '''
+        packets = []
+        pointer = 0
+        while pointer < len(data):
+            packets.append(data[pointer:pointer+self._window])
+            pointer += self._window
+
+        return packets
 
 def main():
     # Check for correct number of arguments
@@ -137,43 +190,24 @@ def main():
         print("* If there are multiple pairs of read_file_name and write_file_name in the command line, it indicates that the SoR client shall request these files from the SoR server in a persistent HTTP session over an RDP connection")
         sys.exit(1)
 
-    # Parse arguments
-    server_ip_address = sys.argv[1]
-    server_udp_port_number = int(sys.argv[2])
-    client_buffer_size = int(sys.argv[3])
-    client_payload_length = int(sys.argv[4])
-    read_file_name = sys.argv[5]
-    write_file_name = sys.argv[6]
-
-    print("Server IP address: " + server_ip_address)
-    print("Server UDP port number: " + str(server_udp_port_number))
-    print("Client buffer size: " + str(client_buffer_size))
-    print("Client payload length: " + str(client_payload_length))
-    print("Read file name: " + read_file_name)
-    print("Write file name: " + write_file_name)
-
     # Initialize UDP socket and bind to server IP address and port number
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    # Create two dictionaries: sending buffer and receiving buffer
-    # Key: client address
-    # Value: queue or string
-    snd_buff = {}
-    rcv_buff = {}
-
-    sender = rdp_sender()
-    receiver = rdp_receiver()
+    rdp = RDP(client_payload_length)
 
     while True:
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
 
         if udp_sock in readable:
-            message, client_address = udp_sock.recvfrom(1024)
+            message, client_address = udp_sock.recvfrom(client_buffer_size)
             print("Client received message from " + str(client_address) + ": " + message.decode())
+            rdp.receive_packet(message)
 
         if udp_sock in writable:
-            msg = "Hello from client"
-            udp_sock.sendto(msg.encode(), (server_ip_address, server_udp_port_number))
+            if buff:
+                packet = buff.pop(0)
+                print("Client sending message to " + str((server_ip_address, server_udp_port_number)) + ": " + packet.decode())
+                udp_sock.sendto(packet, (server_ip_address, server_udp_port_number))
 
         if udp_sock in exceptional:
             print("exceptional")
