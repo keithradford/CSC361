@@ -124,16 +124,14 @@ class RDP:
         self._ack = seq_num + length + 1
 
         # TODO: Handle DAT, detect correct ACK, send FINs
-
+        if "DAT" in commands:
+            self._data += process_response(payload.strip())
         send_commands = []
         if self._state == State.CLOSED:
             if "SYN" in commands:
                 print("Going from CLOSED to SYN_RCVD")
                 send_commands.append("SYN")
                 self._state = State.SYN_RCVD
-            if "DAT" in commands:
-                send_commands.append("DAT")
-                self._data += process_response(payload.strip())
         if self._state == State.SYN_RCVD:
             if "FIN" in commands:
                 print("Going from SYN_RCVD to FIN_RCVD")
@@ -142,17 +140,11 @@ class RDP:
             if "ACK" in commands:
                 print("Going from SYN_SENT to CONNECTED")
                 self._state = State.CONNECTED
-            if "DAT" in commands:
-                send_commands.append("DAT")
-                self._data += process_response(payload.strip())
         if self._state == State.CONNECTED:
             if "FIN" in commands:
                 print("Going from CONNECTED to CON_FIN_RCVD")
                 self._state = State.CON_FIN_RCVD
                 send_commands.append("FIN")
-            if "DAT" in commands:
-                send_commands.append("DAT")
-                self._data += process_response(payload.strip())
 
         # Send packet for first chunk of data
         self.send_packet(send_commands + ["ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[:self._window])
