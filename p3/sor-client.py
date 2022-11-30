@@ -7,6 +7,7 @@ import sys
 import socket
 import select
 from enum import Enum
+from datetime import datetime
 
 server_ip_address = sys.argv[1]
 server_udp_port_number = int(sys.argv[2])
@@ -56,6 +57,29 @@ class RDP:
         request += "Connection: keep-alive\r\n"
         self.send_packet(["SYN", "ACK", "DAT"], 0, -1, self._window, request)
 
+    def get_state(self):
+        return self._state
+
+    def log(self, commands, send=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
+        '''
+        Log the information of the received packet.
+
+        Parameters:
+            commands (str[]): The commands of the packet.
+            sender (bool): Whether the packet is being sent or received.
+            seq_num (int): The sequence number of the packet.
+            length (int): The length of the payload of the packet.
+            ack_num (int): The acknowledgement number of the packet.
+            window (int): The window size of the packet.
+        '''
+
+        # Format the current time
+        time = datetime.now().strftime("%a %b %d %H:%M:%S PDT %Y")
+        send_receive = "Send" if send else "Receive"
+        joined_commands = "|".join(commands)
+        print(f"{time}: {send_receive}; {joined_commands}; Sequence: {seq_num}; Length: {length}; Acknowledgement: {ack_num}; Window: {window}")
+
+
     def timeout(self):
         pass
 
@@ -94,32 +118,38 @@ class RDP:
         return commands, seq_num, length, ack_num, window, payload
 
     def send_packet(self, commands, seq_num=-1, ack_num=-1, window=-1, payload=""):
+        if self._state == State.CLOSED and ack_num != -1:
+            return
         if self._state == State.CLOSED:
             if "SYN" in commands:
-                print("Going from CLOSED to SYN_SENT")
+                # print("Going from CLOSED to SYN_SENT")
                 self._state = State.SYN_SENT
         if self._state == State.SYN_RCVD:
             if "SYN" in commands:
-                print("Going from SYN_RCVD to CONNECTED")
+                # print("Going from SYN_RCVD to CONNECTED")
                 self._state = State.SYN_SENT
         if self._state == State.FIN_RCVD:
             if "FIN" in commands:
-                print("Going from FIN_RCVD to CLOSED")
+                # print("Going from FIN_RCVD to CLOSED")
                 self._state = State.FIN_SENT
         if self._state == State.CONNECTED:
             if "FIN" in commands:
-                print("Going from CONNECTED to FIN_SENT")
+                # print("Going from CONNECTED to FIN_SENT")
                 self._state = State.FIN_SENT
         if self._state == State.CON_FIN_RCVD:
             if "FIN" in commands:
-                print("Going from CON_FIN_RCVD to FIN_SENT")
+                # print("Going from CON_FIN_RCVD to FIN_SENT")
                 self._state = State.FIN_SENT
 
         packet = self.create_packet(commands, seq_num, ack_num, window, payload)
+
+        self.log(commands, True, seq_num, len(payload), ack_num, window)
         buff.append(packet)
 
     def receive_packet(self, data):
         commands, seq_num, length, ack_num, window, payload = self.parse_packet(data)
+        self.log(commands, False, seq_num, length, ack_num, window)
+
         self._seq = ack_num if ack_num != -1 else self._seq
         self._ack = seq_num + length + 1
 
@@ -129,20 +159,20 @@ class RDP:
         send_commands = []
         if self._state == State.CLOSED:
             if "SYN" in commands:
-                print("Going from CLOSED to SYN_RCVD")
+                # print("Going from CLOSED to SYN_RCVD")
                 send_commands.append("SYN")
                 self._state = State.SYN_RCVD
         if self._state == State.SYN_RCVD:
             if "FIN" in commands:
-                print("Going from SYN_RCVD to FIN_RCVD")
+                # print("Going from SYN_RCVD to FIN_RCVD")
                 self._state = State.FIN_RCVD
         if self._state == State.SYN_SENT:
             if "ACK" in commands:
-                print("Going from SYN_SENT to CONNECTED")
+                # print("Going from SYN_SENT to CONNECTED")
                 self._state = State.CONNECTED
         if self._state == State.CONNECTED:
             if "FIN" in commands:
-                print("Going from CONNECTED to CON_FIN_RCVD")
+                # print("Going from CONNECTED to CON_FIN_RCVD")
                 self._state = State.CON_FIN_RCVD
                 send_commands.append("FIN")
 
@@ -153,15 +183,12 @@ class RDP:
             self.send_packet(["DAT", "ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[i:i+self._window])
 
         if self._state == State.FIN_SENT:
-            if "ACK" in commands:
-                print("Going from FIN_SENT to CLOSED")
+                # print("Going from FIN_SENT to CLOSED")
                 self._state = State.CLOSED
                 # Write data to file
                 with open(write_file_name, "w") as f:
                     f.write(self._data)
                 # TODO: Replace this with timeout
-                sys.exit(0)
-
 
     def package_data(self, data):
         '''
@@ -186,20 +213,25 @@ def main():
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     rdp = RDP(client_payload_length)
+    fin_sent = False
 
     while True:
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
 
         if udp_sock in readable:
             message, client_address = udp_sock.recvfrom(client_buffer_size)
-            print("Client received message from " + str(client_address) + ": " + message.decode())
+            # print("Client received message from " + str(client_address) + ": " + message.decode())
             rdp.receive_packet(message)
+            if fin_sent and "ACK" in message.decode().splitlines()[0]:
+                sys.exit(0)
 
         if udp_sock in writable:
             if buff:
                 packet = buff.pop(0)
-                print("Client sending message to " + str((server_ip_address, server_udp_port_number)) + ": " + packet.decode())
+                # print("Client sending message to " + str((server_ip_address, server_udp_port_number)) + ": " + packet.decode())
                 udp_sock.sendto(packet, (server_ip_address, server_udp_port_number))
+                if "FIN" in packet.decode():
+                    fin_sent = True
 
         if udp_sock in exceptional:
             print("exceptional")
