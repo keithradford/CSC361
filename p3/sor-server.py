@@ -165,7 +165,7 @@ class RDP:
         # print(commands)
         self._seq = ack_num if ack_num != -1 else self._seq
         self._ack = seq_num + length + 1
-        # self._window = server_buffer_size
+        self._window = server_buffer_size
 
         # TODO: Handle DAT, detect correct ACK, send FINs
 
@@ -205,33 +205,16 @@ class RDP:
                 # print("Going from FIN_SENT to CLOSED")
                 self._state = State.CLOSED
 
-        print("self._data", len(self._data), self._state)
         if "DAT" in send_commands:
-            # Send packet for first chunk of data
-            # self.send_packet(send_commands + ["ACK"] + ["FIN"] if len(self._data) < self._window else [], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[:server_payload_length])
-            # new_state = State.FIN_SENT if len(self._data) < self._window else self._state
-            # self._window -= server_payload_length
-            # # print(f"Going from {self._state} to {new_state}")
-            # self._state = new_state
-            # Send packets for data that fits in window
-            # i = seq_num
-            while self._window > 0:
+            while server_payload_length < window:
                 self.send_packet(send_commands + ["ACK"] + ["FIN"] if len(self._data) < self._window else [], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[:server_payload_length])
                 # If it's the last packet, break
-                if len(self._data) < self._window:
+                if len(self._data) < window:
                     self._state = State.FIN_SENT
-                    self._window -= len(self._data)
-                self._window -= server_payload_length
+                    window -= len(self._data)
+                    break
+                window -= server_payload_length
                 self._data = self._data[server_payload_length:]
-                # print(f"Going from {self._state} to {new_state}")
-            # for i in range(self._window, len(self._data), self._window):
-            #     # Send FIN if this is the last packet
-            #     if i + self._window >= len(self._data):
-            #         self.send_packet(["DAT", "ACK", "FIN"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[i:i+self._window])
-            #         # print(f"Going from {self._state} to FIN_SENT")
-            #         self._state = State.FIN_SENT
-            #     else:
-            #         self.send_packet(["DAT", "ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[i:i+self._window])
         else:
             self.send_packet(send_commands + ["ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window)
 

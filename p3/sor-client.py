@@ -212,7 +212,7 @@ def main():
     # Initialize UDP socket and bind to server IP address and port number
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    rdp = RDP(client_payload_length)
+    rdp = RDP(client_buffer_size)
     fin_sent = False
 
     while True:
