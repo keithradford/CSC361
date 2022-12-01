@@ -6,8 +6,16 @@ import socket
 import re
 from datetime import datetime
 
+# Parse arguments
+server_ip_address = sys.argv[1]
+server_udp_port_number = int(sys.argv[2])
+server_buffer_size = int(sys.argv[3])
+server_payload_length = int(sys.argv[4])
+
  # Key is the client address, value is the packet(s) to send
 buff = {}
+acked = {}
+timer = {}
 
 REQUEST_PATTERN = r"^GET\s\/(.*)\sHTTP\/1.0((\r\n|\n)Connection:\s(keep-alive|close))?$"
 
@@ -34,7 +42,9 @@ class RDP:
         self._ack = 0
 
         # Initialize buff as a queue of byte arrays
-        buff[self._client_address] = []
+        buff[self._client_address] = [b""] * window
+        acked[self._client_address] = [False] * window
+        timer[self._client_address] = [None] * window
 
     def process_request(self, request):
         '''
@@ -148,13 +158,14 @@ class RDP:
 
         packet = self.create_packet(commands, seq_num, ack_num, window, payload)
         # print(f"Sending packet: {packet}")
-        buff[self._client_address].append(packet)
+        buff[self._client_address][seq_num % server_buffer_size] = packet
 
     def receive_packet(self, data):
         commands, seq_num, length, ack_num, window, payload = self.parse_packet(data)
         # print(commands)
         self._seq = ack_num if ack_num != -1 else self._seq
         self._ack = seq_num + length + 1
+        # self._window = server_buffer_size
 
         # TODO: Handle DAT, detect correct ACK, send FINs
 
@@ -194,21 +205,33 @@ class RDP:
                 # print("Going from FIN_SENT to CLOSED")
                 self._state = State.CLOSED
 
+        print("self._data", len(self._data), self._state)
         if "DAT" in send_commands:
             # Send packet for first chunk of data
-            self.send_packet(send_commands + ["ACK"] + ["FIN"] if len(self._data) < self._window else [], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[:self._window])
-            new_state = State.FIN_SENT if len(self._data) < self._window else self._state
-            # print(f"Going from {self._state} to {new_state}")
-            self._state = new_state
-            # Send packets for remaining data
-            for i in range(self._window, len(self._data), self._window):
-                # Send FIN if this is the last packet
-                if i + self._window >= len(self._data):
-                    self.send_packet(["DAT", "ACK", "FIN"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[i:i+self._window])
-                    print(f"Going from {self._state} to FIN_SENT")
+            # self.send_packet(send_commands + ["ACK"] + ["FIN"] if len(self._data) < self._window else [], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[:server_payload_length])
+            # new_state = State.FIN_SENT if len(self._data) < self._window else self._state
+            # self._window -= server_payload_length
+            # # print(f"Going from {self._state} to {new_state}")
+            # self._state = new_state
+            # Send packets for data that fits in window
+            # i = seq_num
+            while self._window > 0:
+                self.send_packet(send_commands + ["ACK"] + ["FIN"] if len(self._data) < self._window else [], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[:server_payload_length])
+                # If it's the last packet, break
+                if len(self._data) < self._window:
                     self._state = State.FIN_SENT
-                else:
-                    self.send_packet(["DAT", "ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[i:i+self._window])
+                    self._window -= len(self._data)
+                self._window -= server_payload_length
+                self._data = self._data[server_payload_length:]
+                # print(f"Going from {self._state} to {new_state}")
+            # for i in range(self._window, len(self._data), self._window):
+            #     # Send FIN if this is the last packet
+            #     if i + self._window >= len(self._data):
+            #         self.send_packet(["DAT", "ACK", "FIN"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[i:i+self._window])
+            #         # print(f"Going from {self._state} to FIN_SENT")
+            #         self._state = State.FIN_SENT
+            #     else:
+            #         self.send_packet(["DAT", "ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[i:i+self._window])
         else:
             self.send_packet(send_commands + ["ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window)
 
@@ -231,12 +254,6 @@ def main():
         print("Usage: python3 sor-server.py server_ip_address server_udp_port_number server_buffer_size server_payload_length")
         sys.exit(1)
 
-    # Parse arguments
-    server_ip_address = sys.argv[1]
-    server_udp_port_number = int(sys.argv[2])
-    server_buffer_size = int(sys.argv[3])
-    server_payload_length = int(sys.argv[4])
-
     # Initialize UDP socket and bind to server IP address and port number
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_sock.bind((server_ip_address, server_udp_port_number))
@@ -256,10 +273,13 @@ def main():
 
         if udp_sock in writable:
             for c in buff:
-                if len(buff[c]) > 0:
-                    packet = buff[c].pop(0)
-                    # print("Sending packet to client", packet.decode())
-                    udp_sock.sendto(packet, c)
+                for i in range(len(buff[c])):
+                    packet = buff[c][i]
+                    if(packet):
+                        print("Sending packet to client", packet.decode())
+                        udp_sock.sendto(packet, c)
+                        buff[c][i] = b""
+
 
 
         if udp_sock in exceptional:
