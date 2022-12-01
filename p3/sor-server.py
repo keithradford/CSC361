@@ -162,6 +162,10 @@ class RDP:
 
     def receive_packet(self, data):
         commands, seq_num, length, ack_num, window, payload = self.parse_packet(data)
+
+        if length > server_buffer_size:
+            self.send_packet(["RST"], seq_num=0, ack_num=-1, window=server_buffer_size)
+            return
         # print(commands)
         self._seq = ack_num if ack_num != -1 else self._seq
         self._ack = seq_num + length + 1
@@ -248,7 +252,7 @@ def main():
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
 
         if udp_sock in readable:
-            message, client_address = udp_sock.recvfrom(server_buffer_size)
+            message, client_address = udp_sock.recvfrom(1024)
 
             if client_address not in clients:
                 clients[client_address] = RDP(client_address, server_buffer_size)
@@ -259,7 +263,6 @@ def main():
                 for i in range(len(buff[c])):
                     packet = buff[c][i]
                     if(packet):
-                        print("Sending packet to client", packet.decode())
                         udp_sock.sendto(packet, c)
                         buff[c][i] = b""
 

@@ -21,7 +21,7 @@ except socket.error:
     sys.exit()
 clientSocket.settimeout(1)
 
-rdppayload = '''GET /1mb.txt HTTP/1.0
+rdppayload = '''GET /small.html HTTP/1.0
 
 '''
 
@@ -41,7 +41,6 @@ while True:
     print(localtime()+ ": Send; SYN|DAT|ACK|FIN; Sequence: 0; Length: "+str(datalen)+"; Acknowledgment: -1; Window: 5120")
     try:
         reply,address = clientSocket.recvfrom(2048)
-        print(reply.decode())
     except socket.timeout:
         continue
     else:
