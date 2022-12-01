@@ -6,24 +6,8 @@ If there are multiple pairs of read_file_name and write_file_name in the command
 import sys
 import socket
 import select
-from enum import Enum
+from rdp import RDP
 from datetime import datetime
-
-server_ip_address = sys.argv[1]
-server_udp_port_number = int(sys.argv[2])
-client_buffer_size = int(sys.argv[3])
-client_payload_length = int(sys.argv[4])
-read_file_name = sys.argv[5]
-write_file_name = sys.argv[6]
-
-class State(Enum):
-    CLOSED = 0
-    SYN_SENT = 1
-    SYN_RCVD = 2
-    CONNECTED = 3
-    FIN_SENT = 4
-    FIN_RCVD = 5
-    CON_FIN_RCVD = 6
 
 buff = []
 
@@ -40,167 +24,24 @@ def process_response(response):
 
     return payload
 
-class RDP:
+def log(self, commands, send=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
     '''
-    The sender of the reliable data transfer protocol
+    Log the information of the received packet.
+
+    Parameters:
+        commands (str[]): The commands of the packet.
+        sender (bool): Whether the packet is being sent or received.
+        seq_num (int): The sequence number of the packet.
+        length (int): The length of the payload of the packet.
+        ack_num (int): The acknowledgement number of the packet.
+        window (int): The window size of the packet.
     '''
 
-    def __init__(self, window):
-        self._state = State.CLOSED
-        self._seq = 0
-        self._window = window
-        self._data = ""
-        self._ack = 0
-
-        # Create initial HTTP request
-        request = "GET /" + read_file_name + " HTTP/1.0\r\n"
-        request += "Connection: keep-alive\r\n"
-        self.send_packet(["SYN", "ACK", "DAT"], 0, -1, self._window, request)
-
-    def get_state(self):
-        return self._state
-
-    def log(self, commands, send=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
-        '''
-        Log the information of the received packet.
-
-        Parameters:
-            commands (str[]): The commands of the packet.
-            sender (bool): Whether the packet is being sent or received.
-            seq_num (int): The sequence number of the packet.
-            length (int): The length of the payload of the packet.
-            ack_num (int): The acknowledgement number of the packet.
-            window (int): The window size of the packet.
-        '''
-
-        # Format the current time
-        time = datetime.now().strftime("%a %b %d %H:%M:%S PDT %Y")
-        send_receive = "Send" if send else "Receive"
-        joined_commands = "|".join(commands)
-        print(f"{time}: {send_receive}; {joined_commands}; Sequence: {seq_num}; Length: {length}; Acknowledgement: {ack_num}; Window: {window}")
-
-
-    def timeout(self):
-        pass
-
-    def create_packet(self, commands, seq_num=-1, ack_num=-1, window=-1, payload=""):
-        '''
-        Create a packet from the given components.
-        '''
-        payload_length = len(payload) if payload else 0
-        packet = "|".join(commands) + "\n"
-        packet += "Sequence: " + str(seq_num) + "\n"
-        packet += "Length: " + str(payload_length) + "\n"
-        packet += "Acknowledgement: " + str(ack_num) + "\n"
-        packet += "Window: " + str(window) + "\n"
-        packet += "\n" + payload if payload else ""
-
-        return packet.encode()
-
-    def parse_packet(self, packet):
-        '''
-        Parse a packet into its components.
-        '''
-
-        lines = packet.decode().splitlines()
-        commands = lines[0].split("|")
-        # Sequence: #
-        seq_num = int(lines[1].split(": ")[1])
-        # Length: #
-        length = int(lines[2].split(": ")[1])
-        # Acknowledgement: #
-        ack_num = int(lines[3].split(": ")[1])
-        # Window: #
-        window = int(lines[4].split(": ")[1])
-        # Payload = remaining lines
-        payload = "\n".join(lines[5:])
-
-        return commands, seq_num, length, ack_num, window, payload
-
-    def send_packet(self, commands, seq_num=-1, ack_num=-1, window=-1, payload=""):
-        if self._state == State.CLOSED and ack_num != -1:
-            return
-        if self._state == State.CLOSED:
-            if "SYN" in commands:
-                # print("Going from CLOSED to SYN_SENT")
-                self._state = State.SYN_SENT
-        if self._state == State.SYN_RCVD:
-            if "SYN" in commands:
-                # print("Going from SYN_RCVD to CONNECTED")
-                self._state = State.SYN_SENT
-        if self._state == State.FIN_RCVD:
-            if "FIN" in commands:
-                # print("Going from FIN_RCVD to CLOSED")
-                self._state = State.FIN_SENT
-        if self._state == State.CONNECTED:
-            if "FIN" in commands:
-                # print("Going from CONNECTED to FIN_SENT")
-                self._state = State.FIN_SENT
-        if self._state == State.CON_FIN_RCVD:
-            if "FIN" in commands:
-                # print("Going from CON_FIN_RCVD to FIN_SENT")
-                self._state = State.FIN_SENT
-
-        packet = self.create_packet(commands, seq_num, ack_num, window, payload)
-
-        self.log(commands, True, seq_num, len(payload), ack_num, window)
-        buff.append(packet)
-
-    def receive_packet(self, data):
-        commands, seq_num, length, ack_num, window, payload = self.parse_packet(data)
-        self.log(commands, False, seq_num, length, ack_num, window)
-
-        self._seq = ack_num if ack_num != -1 else self._seq
-        self._ack = seq_num + length + 1
-
-        # TODO: Handle DAT, detect correct ACK, send FINs
-        if "DAT" in commands:
-            self._data += process_response(payload.strip())
-        send_commands = []
-        if self._state == State.CLOSED:
-            if "SYN" in commands:
-                # print("Going from CLOSED to SYN_RCVD")
-                send_commands.append("SYN")
-                self._state = State.SYN_RCVD
-        if self._state == State.SYN_RCVD:
-            if "FIN" in commands:
-                # print("Going from SYN_RCVD to FIN_RCVD")
-                self._state = State.FIN_RCVD
-        if self._state == State.SYN_SENT:
-            if "ACK" in commands:
-                # print("Going from SYN_SENT to CONNECTED")
-                self._state = State.CONNECTED
-        if self._state == State.CONNECTED:
-            if "FIN" in commands:
-                # print("Going from CONNECTED to CON_FIN_RCVD")
-                self._state = State.CON_FIN_RCVD
-                send_commands.append("FIN")
-
-        # Send packet for first chunk of data
-        self.send_packet(send_commands + ["ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[:self._window])
-        # Send packets for remaining data
-        for i in range(self._window, len(self._data), self._window):
-            self.send_packet(["DAT", "ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[i:i+self._window])
-
-        if self._state == State.FIN_SENT:
-                # print("Going from FIN_SENT to CLOSED")
-                self._state = State.CLOSED
-                # Write data to file
-                with open(write_file_name, "w") as f:
-                    f.write(self._data)
-                # TODO: Replace this with timeout
-
-    def package_data(self, data):
-        '''
-        Package data into packets of size <= window
-        '''
-        packets = []
-        pointer = 0
-        while pointer < len(data):
-            packets.append(data[pointer:pointer+self._window])
-            pointer += self._window
-
-        return packets
+    # Format the current time
+    time = datetime.now().strftime("%a %b %d %H:%M:%S PDT %Y")
+    send_receive = "Send" if send else "Receive"
+    joined_commands = "|".join(commands)
+    print(f"{time}: {send_receive}; {joined_commands}; Sequence: {seq_num}; Length: {length}; Acknowledgement: {ack_num}; Window: {window}")
 
 def main():
     # Check for correct number of arguments
@@ -209,11 +50,21 @@ def main():
         print("* If there are multiple pairs of read_file_name and write_file_name in the command line, it indicates that the SoR client shall request these files from the SoR server in a persistent HTTP session over an RDP connection")
         sys.exit(1)
 
+    server_ip_address = sys.argv[1]
+    server_udp_port_number = int(sys.argv[2])
+    client_buffer_size = int(sys.argv[3])
+    client_payload_length = int(sys.argv[4])
+    read_file_name = sys.argv[5]
+    write_file_name = sys.argv[6]
+
     # Initialize UDP socket and bind to server IP address and port number
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     rdp = RDP(client_buffer_size)
     fin_sent = False
+
+    request = "GET /" + read_file_name + " HTTP/1.0\r\n"
+    request += "Connection: keep-alive\r\n"
 
     while True:
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
