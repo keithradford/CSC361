@@ -6,7 +6,7 @@ If there are multiple pairs of read_file_name and write_file_name in the command
 import sys
 import socket
 import select
-from rdp import RDP
+from rdp import RDP, State
 from datetime import datetime
 
 buff = []
@@ -60,33 +60,39 @@ def main():
     # Initialize UDP socket and bind to server IP address and port number
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    rdp = RDP(client_buffer_size, client_payload_length)
-    fin_sent = False
+    rdp = RDP(client_buffer_size, client_payload_length, test=True)
 
     request = "GET /" + read_file_name + " HTTP/1.0\r\n"
     request += "Connection: keep-alive\r\n"
 
     rdp.add_data(request)
+    rdp.send_packet()
+
+    wrote = False
 
     while True:
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
 
+        if rdp._state == State.CLOSED and wrote:
+            sys.exit(0)
+
         if udp_sock in readable:
             message, client_address = udp_sock.recvfrom(client_buffer_size)
-            # print("Client received message from " + str(client_address) + ": " + message.decode())
             commands, seq_num, length, ack_num, window, payload = rdp.parse_packet(message)
             log(commands, False, seq_num, length, ack_num, window)
+            if("RST" in commands):
+                sys.exit(1)
             response = rdp.receive_packet(message)
             if response:
                 payload = process_response(payload)
                 # Write the response to the file
                 with open(write_file_name, "w") as f:
                     f.write(payload)
-                sys.exit(0)
+                wrote = True
 
         if udp_sock in writable:
-            packets = rdp.send_packet()
-            for packet in packets:
+            packet = rdp.pop_queue()
+            if packet:
                 commands, seq_num, length, ack_num, window, payload = rdp.parse_packet(packet)
                 log(commands, True, seq_num, length, ack_num, window)
                 udp_sock.sendto(packet, (server_ip_address, server_udp_port_number))

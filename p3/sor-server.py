@@ -85,35 +85,25 @@ def main():
     # Key is the client address, value is an RDP instance
     clients = {}
     # Key is the client address, value is DAT to send
-    active = {}
 
     while True:
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
 
         if udp_sock in readable:
             message, client_address = udp_sock.recvfrom(server_payload_length)
-
             if client_address not in clients:
                 clients[client_address] = RDP(server_buffer_size, server_payload_length)
-                active[client_address] = True
             payload = clients[client_address].receive_packet(message)
             if payload:
                 response = process_request(payload.strip(), client_address)
-                # print("Response: ", response)
                 clients[client_address].add_data(response)
-                active[client_address] = True
 
         if udp_sock in writable:
             for c in clients:
-                if active[c]:
-                    packets = clients[c].send_packet()
-                    # If RST packet is received, close connection
-                    for p in packets:
-                        if b"RST" in p:
-                            udp_sock.sendto(p, c)
-                            active[c] = False
-                            break
-                        udp_sock.sendto(p, c)
+                clients[c].send_packet()
+                packet = clients[c].pop_queue()
+                if packet:
+                    udp_sock.sendto(packet, c)
 
         if udp_sock in exceptional:
             pass
