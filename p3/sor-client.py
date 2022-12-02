@@ -8,21 +8,30 @@ import socket
 import select
 from rdp import RDP, State
 from datetime import datetime
+import re
 
 buff = []
+
+response_pattern = r"HTTP\/1.0(.*)(\r\n|\n)Connection:(.*)(\r\n|\n)Content-Length:\s(\d+)(\r\n|\n)(\r\n|\n)(.*)"
 
 def process_response(response):
     '''
     Processes a HTTP response and returns the payload
     '''
-    lines = response.splitlines()
-    payload = ""
-    for line in lines:
-        if line.startswith("HTTP") or line.startswith("Connection") or line.startswith("Content-Length"):
-            continue
-        payload += line
-
-    return payload
+    # Get rid of empty line at start of response if it is there
+    response = response[2:] if response[:2] == "\r\n" else response
+    response = response[1:] if response[0] == "\n" else response
+    # print("=========================================")
+    # print(response)
+    # print("=========================================")
+    if re.match(response_pattern, response, re.S):
+        match = re.match(response_pattern, response, re.S)
+        length = int(match.group(5))
+        payload = match.group(8)
+        return payload, length
+    else:
+        # print("Not matched")
+        return response, 0
 
 def log(commands, send=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
     '''
@@ -69,28 +78,38 @@ def main():
     rdp.send_packet()
 
     wrote = False
+    data = ""
+    p_length = 0
 
     while True:
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
 
-        if rdp._state == State.CLOSED and wrote:
+        if rdp._state == State.CLOSED and rdp._fin_sent:
+            with open(write_file_name, "w") as f:
+                f.write(data)
             sys.exit(0)
 
         if udp_sock in readable:
             message, client_address = udp_sock.recvfrom(client_buffer_size)
             commands, seq_num, length, ack_num, window, payload = rdp.parse_packet(message)
             log(commands, False, seq_num, length, ack_num, window)
+            # Close the connection if 400 or 404
+            if "400" in payload or "404" in payload:
+                sys.exit(1)
             if("RST" in commands):
                 sys.exit(1)
             response = rdp.receive_packet(message)
             if response:
-                payload = process_response(payload)
-                # Write the response to the file
-                with open(write_file_name, "w") as f:
-                    f.write(payload)
-                wrote = True
+                payload, length = process_response(payload)
+                # rdp.set_content_length(length)
+                # Set p_length to max of p_length and length
+                p_length = max(p_length, length)
+                # p_length = length
+                data += payload
 
         if udp_sock in writable:
+            # Check for any timeouts
+            rdp.timeout()
             packet = rdp.pop_queue()
             if packet:
                 commands, seq_num, length, ack_num, window, payload = rdp.parse_packet(packet)
