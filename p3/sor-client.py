@@ -81,8 +81,7 @@ def main():
                 payload = process_response(payload)
                 # Write the response to the file
                 with open(write_file_name, "w") as f:
-                    f.write(response)
-            if rdp.is_closed() and "ACK" in message.decode().splitlines()[0]:
+                    f.write(payload)
                 sys.exit(0)
 
         if udp_sock in writable:

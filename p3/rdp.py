@@ -21,8 +21,11 @@ class RDP:
         self._window = window
         self._data = ""
         self._payload_length = payload_length
-        self._ack = 0
+        self._ack = -1
         self._receiver_window = window
+
+        self._send_ack = False
+        self._send_rst = False
 
         # Initialize buff as a queue of byte arrays
         self._buff = [b""] * window
@@ -62,7 +65,6 @@ class RDP:
         '''
         Parse a packet into its components.
         '''
-
         lines = packet.decode().splitlines()
         commands = lines[0].split("|")
         # Sequence: #
@@ -79,6 +81,13 @@ class RDP:
         return commands, seq_num, length, ack_num, window, payload
 
     def send_packet(self):
+        if self._send_ack:
+            self._send_ack = False
+            return [self.create_packet(["ACK"], seq_num=self._seq, ack_num=self._ack, window=self._receiver_window)]
+        if self._send_rst:
+            self._send_rst = False
+            return [self.create_packet(["RST"], seq_num=self._seq, ack_num=-1, window=self._receiver_window)]
+
         commands = []
         packets = []
         if self._state == State.CLOSED:
@@ -93,30 +102,39 @@ class RDP:
             print("Going from FIN_RCVD to FIN_SENT")
             commands.append("FIN")
             self._state = State.FIN_SENT
-        if self._state == State.CONNECTED:
-            print("Going from CONNECTED to FIN_SENT")
-            commands.append("FIN")
-            self._state = State.FIN_SENT
+        # if self._state == State.CONNECTED:
+        #     print("Going from CONNECTED to FIN_SENT")
+        #     # commands.append("FIN")
         if self._state == State.CON_FIN_RCVD:
             print("Going from CON_FIN_RCVD to FIN_SENT")
             commands.append("FIN")
             self._state = State.FIN_SENT
 
         # Create DAT packets if there is data to send
-        if self._data[self._seq:self._seq + self._payload_length]:
+        # if self._data[self._seq:self._seq + self._payload_length]:
+        if self._data != "" and self._state != State.FIN_SENT:
+            # commands.append("DAT")
+            # while self._payload_length < self._receiver_window:
+            #     packet = self.create_packet(commands + ["ACK"] + ["FIN"] if len(self._data[self._seq:self._seq + self._payload_length]) < self._receiver_window else [], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[self._seq:self._seq + self._payload_length])
+            #     packets.append(packet)
+            #     self._buff[self._seq % self._window] = packet
+            #     # If it's the last packet, break
+            #     if len(self._data[self._seq:self._seq + self._payload_length]) < self._receiver_window:
+            #         self._state = State.FIN_SENT
+            #         self._receiver_window -= len(self._data[self._seq:self._seq + self._payload_length])
+            #         break
+            #     self._receiver_window -= self._payload_length
+            #     self._seq += self._payload_length
+            #     commands = ["DAT"]
             commands.append("DAT")
-            while self._payload_length < self._receiver_window:
-                packet = self.create_packet(commands + ["ACK"] + ["FIN"] if len(self._data[self._seq:self._seq + self._payload_length]) < self._receiver_window else [], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data[self._seq:self._seq + self._payload_length])
-                packets.append(packet)
-                self._buff[self._seq % self._window] = packet
-                # If it's the last packet, break
-                if len(self._data[self._seq:self._seq + self._payload_length]) < self._receiver_window:
+            if len(self._data) < self._receiver_window:
+                commands.append("FIN")
+                if self._state == State.CONNECTED:
                     self._state = State.FIN_SENT
-                    self._receiver_window -= len(self._data[self._seq:self._seq + self._payload_length])
-                    break
-                self._receiver_window -= self._payload_length
-                self._seq += self._payload_length
-                commands = ["DAT"]
+            packet = self.create_packet(commands + ["ACK"], seq_num=self._seq, ack_num=self._ack, window=self._window, payload=self._data)
+            packets.append(packet)
+            self._buff[self._seq % self._window] = packet
+            self._data = ""
         else:
             packet = self.create_packet(commands + ["ACK"], self._seq, self._ack, window=self._window)
             # print(f"Sending packet: {packet}")
@@ -128,8 +146,10 @@ class RDP:
     def receive_packet(self, data):
         commands, seq_num, length, ack_num, window, payload = self.parse_packet(data)
 
+        # print(commands, seq_num, length, ack_num, window, payload)
+
         if length > self._window:
-            self.send_packet(["RST"], seq_num=0, ack_num=-1, window=self._window)
+            self._send_rst = True
             return
         # print(commands)
         self._seq = ack_num if ack_num != -1 else self._seq
@@ -167,12 +187,13 @@ class RDP:
             #     send_commands.append("DAT")
                 # self._data = self.process_request(payload.strip())
 
-        # if self._state == State.FIN_SENT:
-        #     if "ACK" in commands and "FIN" in commands:
-        #         self.send_packet(["ACK"], self._seq, self._ack)
-        #     else:
-        #         # print("Going from FIN_SENT to CLOSED")
-        #         self._state = State.CLOSED
+        if self._state == State.FIN_SENT:
+            if "ACK" in commands and "FIN" in commands:
+                self._send_ack = True
+                return
+            else:
+                print("Going from FIN_SENT to CLOSED")
+                self._state = State.CLOSED
 
         # if "DAT" in send_commands:
         #     while self._payload_length < window:
