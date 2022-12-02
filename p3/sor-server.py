@@ -91,25 +91,20 @@ def main():
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
 
         if udp_sock in readable:
-            message, client_address = udp_sock.recvfrom(1024)
+            message, client_address = udp_sock.recvfrom(server_buffer_size)
 
             if client_address not in clients:
                 clients[client_address] = RDP(server_buffer_size, server_payload_length)
             payload = clients[client_address].receive_packet(message)
             if payload:
                 response = process_request(payload.strip(), client_address)
-                snd_buff[client_address] = response
+                clients[client_address].add_data(response)
 
         if udp_sock in writable:
             for c in clients:
-                if c in snd_buff:
-                    clients[c].add_data(snd_buff[c])
-                packet = clients[c].send()
-                if packet:
-                    udp_sock.sendto(packet, c)
-                    if clients[c].is_closed():
-                        del clients[c]
-                        del snd_buff[c]
+                packets = clients[c].send_packet()
+                for p in packets:
+                    udp_sock.sendto(p, c)
 
         if udp_sock in exceptional:
             pass

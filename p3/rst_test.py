@@ -41,6 +41,7 @@ while True:
     print(localtime()+ ": Send; SYN|DAT|ACK|FIN; Sequence: 0; Length: "+str(datalen)+"; Acknowledgment: -1; Window: 5120")
     try:
         reply,address = clientSocket.recvfrom(2048)
+        print(localtime()+ ": Recv; "+reply.decode())
     except socket.timeout:
         continue
     else:

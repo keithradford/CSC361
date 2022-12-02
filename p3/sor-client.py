@@ -24,7 +24,7 @@ def process_response(response):
 
     return payload
 
-def log(self, commands, send=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
+def log(commands, send=True, seq_num=-1, length=-1, ack_num=-1, window=-1):
     '''
     Log the information of the received packet.
 
@@ -60,11 +60,13 @@ def main():
     # Initialize UDP socket and bind to server IP address and port number
     udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    rdp = RDP(client_buffer_size)
+    rdp = RDP(client_buffer_size, client_payload_length)
     fin_sent = False
 
     request = "GET /" + read_file_name + " HTTP/1.0\r\n"
     request += "Connection: keep-alive\r\n"
+
+    rdp.add_data(request)
 
     while True:
         readable, writable, exceptional = select.select([udp_sock], [udp_sock], [udp_sock], 0.1)
@@ -72,17 +74,23 @@ def main():
         if udp_sock in readable:
             message, client_address = udp_sock.recvfrom(client_buffer_size)
             # print("Client received message from " + str(client_address) + ": " + message.decode())
-            rdp.receive_packet(message)
-            if fin_sent and "ACK" in message.decode().splitlines()[0]:
+            commands, seq_num, length, ack_num, window, payload = rdp.parse_packet(message)
+            log(commands, False, seq_num, length, ack_num, window)
+            response = rdp.receive_packet(message)
+            if response:
+                payload = process_response(payload)
+                # Write the response to the file
+                with open(write_file_name, "w") as f:
+                    f.write(response)
+            if rdp.is_closed() and "ACK" in message.decode().splitlines()[0]:
                 sys.exit(0)
 
         if udp_sock in writable:
-            if buff:
-                packet = buff.pop(0)
-                # print("Client sending message to " + str((server_ip_address, server_udp_port_number)) + ": " + packet.decode())
+            packets = rdp.send_packet()
+            for packet in packets:
+                commands, seq_num, length, ack_num, window, payload = rdp.parse_packet(packet)
+                log(commands, True, seq_num, length, ack_num, window)
                 udp_sock.sendto(packet, (server_ip_address, server_udp_port_number))
-                if "FIN" in packet.decode():
-                    fin_sent = True
 
         if udp_sock in exceptional:
             print("exceptional")
